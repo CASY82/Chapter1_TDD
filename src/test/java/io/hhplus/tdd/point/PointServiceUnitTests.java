@@ -169,4 +169,16 @@ public class PointServiceUnitTests {
 		// then
 		assertEquals(compareList.size(), 5);
 	}
+	
+	@Test
+	public void 포인트_내역_없을_때() {
+		// given
+		when(this.pointHistoryTable.selectAllByUserId(anyLong())).thenReturn(new ArrayList<>());
+		
+		// when
+		List<PointHistory> compareList = this.pointService.getPointHistory(anyLong());
+		
+		// then
+		assertEquals(compareList.size(), 0);
+	}
 }
