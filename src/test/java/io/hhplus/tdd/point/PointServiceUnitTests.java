@@ -8,7 +8,12 @@ import static org.mockito.Mockito.when;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.locks.ReentrantLock;
 
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
@@ -23,14 +28,21 @@ import lombok.extern.slf4j.Slf4j;
 @ExtendWith(MockitoExtension.class)
 public class PointServiceUnitTests {
 	
+	private final ReentrantLock lock = new ReentrantLock(); // ✅ 실제 객체 사용
+;
+	
 	@Mock
 	private PointHistoryTable pointHistoryTable;
 	
 	@Mock
 	private UserPointTable userPointTable;
 	
-	@InjectMocks
 	private PointService pointService;
+	
+	@BeforeEach
+    public void setup() {
+        this.pointService = new PointService(userPointTable, pointHistoryTable, lock);  // ✅ 직접 주입
+    }
 	
 	// 포인트 조회
 	
@@ -59,11 +71,14 @@ public class PointServiceUnitTests {
 	
 	@Test
 	public void 포인트_조회_id에_해당하는_유저가_없을_경우() {
-		// 조회시, null로 없다면 새로 생성된 두 객체는 같을 수가 없다.
-		when(this.pointService.getPoint(anyLong())).thenReturn(null);
+		// given
+		when(this.userPointTable.selectById(anyLong())).thenReturn(null);
+		
+		// when
 		UserPoint test1 = this.pointService.getPoint(1L);
 		UserPoint test2 = this.pointService.getPoint(2L);
 		
+		// then
 		assertNotEquals(test1, test2);
 	}
 	
@@ -157,14 +172,13 @@ public class PointServiceUnitTests {
 		return data;
 	}
 	
-	
 	@Test
 	public void 포인트_내역_조회_정상() {
 		// given
 		when(this.pointHistoryTable.selectAllByUserId(anyLong())).thenReturn(this.makeHistoryData());
 		
 		// when
-		List<PointHistory> compareList = this.pointService.getPointHistory(anyLong());
+		List<PointHistory> compareList = this.pointService.getPointHistory(1L);
 		
 		// then
 		assertEquals(compareList.size(), 5);
@@ -176,9 +190,44 @@ public class PointServiceUnitTests {
 		when(this.pointHistoryTable.selectAllByUserId(anyLong())).thenReturn(new ArrayList<>());
 		
 		// when
-		List<PointHistory> compareList = this.pointService.getPointHistory(anyLong());
+		List<PointHistory> compareList = this.pointService.getPointHistory(1L);
 		
 		// then
 		assertEquals(compareList.size(), 0);
 	}
+	
+    @Test
+    public void 동일한_유저에게_동시성_요청_테스트() throws InterruptedException {
+        // given
+        Long userId = 1L;
+        UserPoint initialUserPoint = new UserPoint(userId, 100L, System.currentTimeMillis());
+        when(this.userPointTable.selectById(userId)).thenReturn(initialUserPoint);
+
+        // CountDownLatch를 사용하여 모든 스레드가 동시에 시작되도록 설정
+        CountDownLatch latch = new CountDownLatch(1);
+        ExecutorService executor = Executors.newFixedThreadPool(3);
+
+        // 여러 스레드를 생성하여 동일한 사용자에게 요청
+        for (int i = 0; i < 3; i++) {
+            executor.submit(() -> {
+                try {
+                    latch.await();
+                    this.pointService.rechargePoint(userId, 50L);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+            });
+        }
+
+        latch.countDown();
+
+        executor.shutdown();
+        while (!executor.isTerminated()) {
+            // 대기
+        }
+
+        UserPoint finalPoint = this.pointService.getPoint(userId);
+        
+        assertEquals(100L + (3 * 50L), finalPoint.getPoint());
+    }
 }
